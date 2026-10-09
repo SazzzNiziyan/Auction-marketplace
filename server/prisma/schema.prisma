@@ -1,0 +1,995 @@
+// This is your Prisma schema file
+// Auction + E-Commerce Platform — Full Schema Draft (M0/M1)
+// All monetary values stored as INTEGER PAISE (₹1 = 100 paise)
+// All timestamps stored as UTC
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── ENUMS ───────────────────────────────────────────────────────────────────
+
+enum UserRole {
+  GUEST
+  BUYER
+  SELLER
+  ADMIN
+  SUPER_ADMIN
+}
+
+enum UserStatus {
+  PENDING_VERIFICATION
+  ACTIVE
+  SUSPENDED
+  DEACTIVATED
+}
+
+enum SellerApplicationStatus {
+  PENDING
+  UNDER_REVIEW
+  APPROVED
+  REJECTED
+  REVOKED
+}
+
+enum ListingType {
+  FIXED_PRICE
+  AUCTION
+}
+
+enum ListingStatus {
+  DRAFT
+  PENDING_MODERATION
+  ACTIVE
+  PAUSED
+  SOLD
+  UNSOLD
+  REMOVED
+}
+
+enum AuctionStatus {
+  SCHEDULED
+  DEPOSIT_OPEN    // accepting caution deposits
+  LIVE            // bidding open
+  CLOSING         // anti-sniping extension active
+  ENDED           // hammer down, awaiting payment
+  COMPLETED       // payment received
+  CANCELLED
+  FAILED          // no bids or payment defaulted
+}
+
+enum BidStatus {
+  ACTIVE
+  OUTBID
+  RETRACTED       // admin override only
+  WINNING
+}
+
+enum DepositStatus {
+  PENDING
+  PAID
+  REFUNDED
+  FORFEITED
+}
+
+enum OrderStatus {
+  PENDING_PAYMENT
+  PAYMENT_CONFIRMED
+  PROCESSING
+  SHIPPED
+  DELIVERED
+  COMPLETED
+  CANCELLED
+  REFUND_REQUESTED
+  REFUND_APPROVED
+  REFUNDED
+}
+
+enum PaymentStatus {
+  CREATED
+  AUTHORIZED
+  CAPTURED
+  FAILED
+  REFUNDED
+  PARTIALLY_REFUNDED
+}
+
+enum PaymentPurpose {
+  ORDER
+  AUCTION_DEPOSIT
+  AUCTION_WINNER
+}
+
+enum RefundStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  PROCESSED
+}
+
+enum ModerationDecisionType {
+  APPROVED
+  REJECTED
+  FLAGGED
+  REMOVED
+}
+
+enum NotificationType {
+  BID_PLACED
+  OUTBID
+  AUCTION_WON
+  AUCTION_LOST
+  ORDER_PLACED
+  ORDER_SHIPPED
+  ORDER_DELIVERED
+  PAYMENT_CONFIRMED
+  REFUND_PROCESSED
+  SELLER_APPLICATION_UPDATE
+  LISTING_MODERATION_UPDATE
+  REPORT_UPDATE
+  SYSTEM_ALERT
+}
+
+enum ReportReason {
+  COUNTERFEIT
+  PROHIBITED_ITEM
+  MISLEADING_DESCRIPTION
+  FRAUD
+  SPAM
+  OTHER
+}
+
+enum ReportStatus {
+  OPEN
+  UNDER_REVIEW
+  RESOLVED
+  DISMISSED
+}
+
+// ─── IDENTITY & ACCESS ───────────────────────────────────────────────────────
+
+model User {
+  id              String     @id @default(uuid())
+  email           String     @unique
+  passwordHash    String
+  role            UserRole   @default(BUYER)
+  status          UserStatus @default(PENDING_VERIFICATION)
+  emailVerifiedAt DateTime?
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+  lastLoginAt     DateTime?
+  deletedAt       DateTime?  // soft delete
+
+  // Relations
+  profile             UserProfile?
+  sellerProfile       SellerProfile?
+  sessions            Session[]
+  emailVerifications  EmailVerification[]
+  passwordResets      PasswordReset[]
+  sellerApplication   SellerApplication?
+  listings            ProductListing[]
+  bids                Bid[]
+  autoBidRules        AutoBidRule[]
+  auctionDeposits     AuctionDeposit[]
+  cartItems           CartItem[]
+  orders              Order[]            @relation("BuyerOrders")
+  sellerOrders        Order[]            @relation("SellerOrders")
+  reviewsGiven        Review[]           @relation("ReviewsGiven")
+  reviewsReceived     Review[]           @relation("ReviewsReceived")
+  watchlistItems      WatchlistItem[]
+  sellerFollows       SellerFollow[]     @relation("FollowerFollows")
+  sellerFollowers     SellerFollow[]     @relation("SellerFollowers")
+  notifications       Notification[]
+  notificationPrefs   NotificationPreference?
+  reportsSubmitted    Report[]           @relation("ReporterReports")
+  moderationDecisions ModerationDecision[]
+  auditLogs           AuditLog[]
+  payments            Payment[]
+  ledgerEntries       LedgerEntry[]
+  sellerRefundRequests RefundRequest[] @relation("SellerRefundRequests")
+  buyerRefundRequests  RefundRequest[] @relation("BuyerRefundRequests")
+
+  @@index([email])
+  @@index([role, status])
+  @@index([deletedAt])
+  @@map("users")
+}
+
+model UserProfile {
+  id          String   @id @default(uuid())
+  userId      String   @unique
+  displayName String
+  avatarUrl   String?
+  phone       String?
+  addressLine1 String?
+  addressLine2 String?
+  city        String?
+  state       String?
+  pincode     String?
+  country     String   @default("IN")
+  bio         String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_profiles")
+}
+
+model Session {
+  id           String   @id @default(uuid())
+  userId       String
+  refreshToken String   @unique
+  userAgent    String?
+  ipAddress    String?
+  expiresAt    DateTime
+  createdAt    DateTime @default(now())
+  revokedAt    DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([refreshToken])
+  @@map("sessions")
+}
+
+model EmailVerification {
+  id        String   @id @default(uuid())
+  userId    String
+  token     String   @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([token])
+  @@map("email_verifications")
+}
+
+model PasswordReset {
+  id        String   @id @default(uuid())
+  userId    String
+  token     String   @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([token])
+  @@map("password_resets")
+}
+
+// ─── SELLER PROFILES & APPLICATIONS ─────────────────────────────────────────
+
+model SellerProfile {
+  id              String   @id @default(uuid())
+  userId          String   @unique
+  businessName    String
+  businessType    String?  // individual, sole_proprietor, private_limited, etc.
+  gstNumber       String?
+  panNumber       String?
+  bankAccountName String?
+  bankAccountNo   String?
+  bankIfscCode    String?
+  businessAddressLine1 String?
+  businessAddressLine2 String?
+  businessCity    String?
+  businessState   String?
+  businessPincode String?
+  returnPolicy    String?  // seller-defined return policy text
+  shippingPolicy  String?
+  avgRating       Decimal  @default(0) @db.Decimal(3, 2)
+  totalRatings    Int      @default(0)
+  totalSales      Int      @default(0)
+  isVerified      Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  user     User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  listings ProductListing[]
+
+  @@map("seller_profiles")
+}
+
+model SellerApplication {
+  id              String                  @id @default(uuid())
+  userId          String                  @unique
+  status          SellerApplicationStatus @default(PENDING)
+  businessName    String
+  businessType    String
+  gstNumber       String?
+  panNumber       String?
+  
+  bankAccountName String?
+  bankAccountNo   String?
+  bankIfscCode    String?
+  
+  businessAddressLine1 String?
+  businessAddressLine2 String?
+  businessCity    String?
+  businessState   String?
+  businessPincode String?
+  reviewedById    String?
+  reviewNote      String?
+  submittedAt     DateTime                @default(now())
+  reviewedAt      DateTime?
+  updatedAt       DateTime                @updatedAt
+
+  user      User                          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  documents SellerVerificationDocument[]
+
+  @@map("seller_applications")
+}
+
+model SellerVerificationDocument {
+  id            String   @id @default(uuid())
+  applicationId String
+  documentType  String   // pan_card, gst_certificate, bank_statement, etc.
+  fileUrl       String
+  fileName      String
+  uploadedAt    DateTime @default(now())
+
+  application SellerApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+
+  @@map("seller_verification_documents")
+}
+
+model SellerFollow {
+  id         String   @id @default(uuid())
+  followerId String
+  sellerId   String
+  createdAt  DateTime @default(now())
+
+  follower User @relation("FollowerFollows", fields: [followerId], references: [id], onDelete: Cascade)
+  seller   User @relation("SellerFollowers", fields: [sellerId], references: [id], onDelete: Cascade)
+
+  @@unique([followerId, sellerId])
+  @@map("seller_follows")
+}
+
+// ─── CATALOG ─────────────────────────────────────────────────────────────────
+
+model Category {
+  id          String  @id @default(uuid())
+  name        String  @unique
+  slug        String  @unique
+  description String?
+  imageUrl    String?
+  parentId    String?
+  isActive    Boolean @default(true)
+  sortOrder   Int     @default(0)
+
+  parent     Category?           @relation("CategoryHierarchy", fields: [parentId], references: [id])
+  children   Category[]          @relation("CategoryHierarchy")
+  attributes CategoryAttribute[]
+  listings   ProductListing[]
+
+  @@index([slug])
+  @@index([parentId])
+  @@map("categories")
+}
+
+model CategoryAttribute {
+  id           String   @id @default(uuid())
+  categoryId   String
+  name         String
+  slug         String
+  type         String   // text, number, select, multi_select, boolean
+  isRequired   Boolean  @default(false)
+  isFilterable Boolean  @default(false)
+  sortOrder    Int      @default(0)
+
+  category Category                @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  options  CategoryAttributeOption[]
+  values   ListingAttributeValue[]
+
+  @@unique([categoryId, slug])
+  @@map("category_attributes")
+}
+
+model CategoryAttributeOption {
+  id          String @id @default(uuid())
+  attributeId String
+  value       String
+  label       String
+  sortOrder   Int    @default(0)
+
+  attribute CategoryAttribute @relation(fields: [attributeId], references: [id], onDelete: Cascade)
+
+  @@map("category_attribute_options")
+}
+
+model ProductListing {
+  id              String        @id @default(uuid())
+  sellerId        String
+  sellerProfileId String?
+  categoryId      String
+  type            ListingType
+  status          ListingStatus @default(DRAFT)
+  title           String
+  slug            String        @unique
+  description     String
+  condition       String        // new, like_new, good, fair, poor
+  priceInPaise    Int?          // for FIXED_PRICE type
+  stockQuantity   Int           @default(1)
+  sku             String?
+  tags            String[]
+  isDigital       Boolean       @default(false)
+  shippingNote    String?
+  weightGrams     Int?
+  dimensionsCm    Json?         // { l, w, h }
+  viewCount       Int           @default(0)
+  wishlistCount   Int           @default(0)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  publishedAt     DateTime?
+  deletedAt       DateTime?
+
+  seller         User                    @relation(fields: [sellerId], references: [id])
+  sellerProfile  SellerProfile?          @relation(fields: [sellerProfileId], references: [id])
+  category       Category                @relation(fields: [categoryId], references: [id])
+  images         ListingImage[]
+  attributes     ListingAttributeValue[]
+  auction        Auction?
+  cartItems      CartItem[]
+  orderItems     OrderItem[]
+  watchlistItems WatchlistItem[]
+  statusHistory  ListingStatusHistory[]
+  moderation     ModerationDecision[]
+  reports        Report[]
+
+  @@index([sellerId, status])
+  @@index([categoryId, status])
+  @@index([type, status])
+  @@index([slug])
+  @@index([deletedAt])
+  @@map("product_listings")
+}
+
+model ListingImage {
+  id         String   @id @default(uuid())
+  listingId  String
+  imageUrl   String
+  thumbUrl   String?
+  altText    String?
+  sortOrder  Int      @default(0)
+  isPrimary  Boolean  @default(false)
+  uploadedAt DateTime @default(now())
+
+  listing ProductListing @relation(fields: [listingId], references: [id], onDelete: Cascade)
+
+  @@index([listingId])
+  @@map("listing_images")
+}
+
+model ListingAttributeValue {
+  id          String @id @default(uuid())
+  listingId   String
+  attributeId String
+  value       String
+
+  listing   ProductListing    @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  attribute CategoryAttribute @relation(fields: [attributeId], references: [id])
+
+  @@unique([listingId, attributeId])
+  @@map("listing_attribute_values")
+}
+
+model ListingStatusHistory {
+  id        String        @id @default(uuid())
+  listingId String
+  fromStatus ListingStatus?
+  toStatus  ListingStatus
+  changedBy String?
+  reason    String?
+  createdAt DateTime      @default(now())
+
+  listing ProductListing @relation(fields: [listingId], references: [id], onDelete: Cascade)
+
+  @@index([listingId])
+  @@map("listing_status_history")
+}
+
+// ─── AUCTIONS ────────────────────────────────────────────────────────────────
+
+model Auction {
+  id                      String        @id @default(uuid())
+  listingId               String        @unique
+  status                  AuctionStatus @default(SCHEDULED)
+  startingBidPaise        Int
+  reservePricePaise       Int?          // hidden reserve
+  buyNowPricePaise        Int?          // optional buy-now
+  depositAmountPaise      Int           // caution deposit required
+  currentHighBidPaise     Int?
+  currentHighBidderId     String?
+  bidCount                Int           @default(0)
+  scheduledStartAt        DateTime
+  scheduledEndAt          DateTime
+  depositDeadlineAt       DateTime      // when deposit window closes
+  actualStartAt           DateTime?
+  actualEndAt             DateTime?
+  antiSnipExtensionMins   Int           @default(5)
+  maxAntiSnipExtensions   Int           @default(3)
+  snipExtensionCount      Int           @default(0)
+  winnerId                String?
+  winningBidPaise         Int?
+  winnerPaymentDeadlineAt DateTime?
+  createdAt               DateTime      @default(now())
+  updatedAt               DateTime      @updatedAt
+
+  listing         ProductListing   @relation(fields: [listingId], references: [id])
+  bids            Bid[]
+  autoBidRules    AutoBidRule[]
+  participants    AuctionParticipant[]
+  deposits        AuctionDeposit[]
+  fallbackOffers  AuctionFallbackOffer[]
+  eventLog        AuctionEventLog[]
+
+  @@index([status, scheduledStartAt])
+  @@map("auctions")
+}
+
+model AuctionParticipant {
+  id         String   @id @default(uuid())
+  auctionId  String
+  userId     String
+  joinedAt   DateTime @default(now())
+
+  auction Auction @relation(fields: [auctionId], references: [id], onDelete: Cascade)
+
+  @@unique([auctionId, userId])
+  @@map("auction_participants")
+}
+
+model AuctionDeposit {
+  id             String        @id @default(uuid())
+  auctionId      String
+  userId         String
+  amountPaise    Int
+  status         DepositStatus @default(PENDING)
+  paymentId      String?       // links to Payment record
+  paidAt         DateTime?
+  refundedAt     DateTime?
+  forfeitedAt    DateTime?
+  forfeitReason  String?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  auction Auction  @relation(fields: [auctionId], references: [id], onDelete: Cascade)
+  user    User     @relation(fields: [userId], references: [id])
+  payment Payment? @relation(fields: [paymentId], references: [id])
+
+  @@unique([auctionId, userId])
+  @@index([auctionId, status])
+  @@map("auction_deposits")
+}
+
+model Bid {
+  id            String    @id @default(uuid())
+  auctionId     String
+  userId        String
+  amountPaise   Int
+  status        BidStatus @default(ACTIVE)
+  isAutoBid     Boolean   @default(false)
+  ipAddress     String?
+  userAgent     String?
+  placedAt      DateTime  @default(now())
+
+  auction Auction @relation(fields: [auctionId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id])
+
+  @@index([auctionId, amountPaise(sort: Desc)])
+  @@index([auctionId, userId])
+  @@index([userId, placedAt])
+  @@map("bids")
+}
+
+model AutoBidRule {
+  id              String   @id @default(uuid())
+  auctionId       String
+  userId          String
+  maxAmountPaise  Int
+  incrementPaise  Int      @default(10000) // ₹100 default increment
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  auction Auction @relation(fields: [auctionId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id])
+
+  @@unique([auctionId, userId])
+  @@map("auto_bid_rules")
+}
+
+model AuctionFallbackOffer {
+  id               String   @id @default(uuid())
+  auctionId        String
+  userId           String
+  offerRank        Int      // 2 = first fallback, 3 = second, etc.
+  offerAmountPaise Int
+  offeredAt        DateTime @default(now())
+  acceptedAt       DateTime?
+  declinedAt       DateTime?
+  expiredAt        DateTime?
+
+  auction Auction @relation(fields: [auctionId], references: [id], onDelete: Cascade)
+
+  @@index([auctionId, offerRank])
+  @@map("auction_fallback_offers")
+}
+
+model AuctionEventLog {
+  id        String   @id @default(uuid())
+  auctionId String
+  eventType String   // bid_placed, outbid, anti_snip_triggered, auction_ended, etc.
+  actorId   String?
+  payload   Json?
+  createdAt DateTime @default(now())
+
+  auction Auction @relation(fields: [auctionId], references: [id], onDelete: Cascade)
+
+  @@index([auctionId, createdAt])
+  @@map("auction_event_logs")
+}
+
+// ─── COMMERCE ────────────────────────────────────────────────────────────────
+
+model CartItem {
+  id          String   @id @default(uuid())
+  userId      String
+  listingId   String
+  quantity    Int      @default(1)
+  addedAt     DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user    User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  listing ProductListing @relation(fields: [listingId], references: [id])
+
+  @@unique([userId, listingId])
+  @@index([userId])
+  @@map("cart_items")
+}
+
+model Order {
+  id               String      @id @default(uuid())
+  buyerId          String
+  sellerId         String
+  status           OrderStatus @default(PENDING_PAYMENT)
+  subtotalPaise    Int
+  shippingPaise    Int         @default(0)
+  discountPaise    Int         @default(0)
+  totalPaise       Int
+  shippingAddress  Json
+  notes            String?
+  refundReason     String?
+  refundEvidenceUrl String?
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
+
+  buyer         User               @relation("BuyerOrders", fields: [buyerId], references: [id])
+  seller        User               @relation("SellerOrders", fields: [sellerId], references: [id])
+  items         OrderItem[]
+  shipments     Shipment[]
+  payments      Payment[]
+  statusHistory OrderStatusHistory[]
+  reviews       Review[]
+  refundRequest RefundRequest?
+
+  @@index([buyerId, status])
+  @@index([sellerId, status])
+  @@map("orders")
+}
+
+model OrderItem {
+  id              String   @id @default(uuid())
+  orderId         String
+  listingId       String
+  quantity        Int
+  unitPriceInPaise Int
+  snapshotTitle   String   // denormalized for history
+  snapshotImageUrl String?
+
+  order   Order          @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  listing ProductListing @relation(fields: [listingId], references: [id])
+
+  @@index([orderId])
+  @@map("order_items")
+}
+
+model Shipment {
+  id              String   @id @default(uuid())
+  orderId         String
+  carrier         String?
+  trackingNumber  String?
+  trackingUrl     String?
+  shippedAt       DateTime?
+  estimatedDelivery DateTime?
+  deliveredAt     DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+  @@map("shipments")
+}
+
+model OrderStatusHistory {
+  id         String      @id @default(uuid())
+  orderId    String
+  fromStatus OrderStatus?
+  toStatus   OrderStatus
+  changedBy  String?
+  note       String?
+  createdAt  DateTime    @default(now())
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+  @@map("order_status_history")
+}
+
+// ─── PAYMENTS & FINANCE ──────────────────────────────────────────────────────
+
+model Payment {
+  id                    String         @id @default(uuid())
+  userId                String
+  orderId               String?
+  purpose               PaymentPurpose
+  razorpayOrderId       String?        @unique
+  razorpayPaymentId     String?        @unique
+  razorpaySignature     String?
+  amountPaise           Int
+  currency              String         @default("INR")
+  status                PaymentStatus  @default(CREATED)
+  failureReason         String?
+  capturedAt            DateTime?
+  createdAt             DateTime       @default(now())
+  updatedAt             DateTime       @updatedAt
+
+  user           User             @relation(fields: [userId], references: [id])
+  order          Order?           @relation(fields: [orderId], references: [id])
+  webhookEvents  PaymentWebhookEvent[]
+  refunds        Refund[]
+  auctionDeposit AuctionDeposit[]
+
+  @@index([userId])
+  @@index([razorpayOrderId])
+  @@index([razorpayPaymentId])
+  @@map("payments")
+}
+
+model PaymentWebhookEvent {
+  id            String   @id @default(uuid())
+  paymentId     String?
+  eventId       String   @unique // Razorpay event ID for idempotency
+  eventType     String
+  payload       Json
+  processedAt   DateTime?
+  failureReason String?
+  createdAt     DateTime @default(now())
+
+  payment Payment? @relation(fields: [paymentId], references: [id])
+
+  @@index([eventId])
+  @@map("payment_webhook_events")
+}
+
+model Refund {
+  id               String       @id @default(uuid())
+  paymentId        String
+  orderId          String?
+  amountPaise      Int
+  reason           String
+  evidenceUrls     String[]
+  status           RefundStatus @default(PENDING)
+  razorpayRefundId String?
+  processedAt      DateTime?
+  reviewedById     String?
+  reviewNote       String?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  payment Payment @relation(fields: [paymentId], references: [id])
+
+  @@index([paymentId])
+  @@map("refunds")
+}
+
+model CommissionPolicy {
+  id                   String   @id @default(uuid())
+  name                 String   @unique
+  categoryId           String?
+  commissionPercent    Decimal  @db.Decimal(5, 2)
+  minCommissionPaise   Int?
+  maxCommissionPaise   Int?
+  isDefault            Boolean  @default(false)
+  isActive             Boolean  @default(true)
+  createdAt            DateTime @default(now())
+
+  @@map("commission_policies")
+}
+
+model LedgerEntry {
+  id             String   @id @default(uuid())
+  userId         String
+  orderId        String?
+  paymentId      String?
+  entryType      String   // sale_credit, commission_debit, refund_debit, deposit_credit, etc.
+  amountPaise    Int
+  balancePaise   Int      // running balance snapshot
+  description    String
+  createdAt      DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId, createdAt])
+  @@map("ledger_entries")
+}
+
+// ─── ENGAGEMENT ──────────────────────────────────────────────────────────────
+
+model WatchlistItem {
+  id        String   @id @default(uuid())
+  userId    String
+  listingId String
+  addedAt   DateTime @default(now())
+
+  user    User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  listing ProductListing @relation(fields: [listingId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, listingId])
+  @@map("watchlist_items")
+}
+
+model Review {
+  id          String   @id @default(uuid())
+  orderId     String
+  reviewerId  String
+  revieweeId  String
+  rating      Int      // 1-5
+  title       String?
+  body        String?
+  imageUrls   String[]
+  isVerified  Boolean  @default(true) // tied to a real order
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  order     Order @relation(fields: [orderId], references: [id])
+  reviewer  User  @relation("ReviewsGiven", fields: [reviewerId], references: [id])
+  reviewee  User  @relation("ReviewsReceived", fields: [revieweeId], references: [id])
+
+  @@unique([orderId, reviewerId])
+  @@index([revieweeId, rating])
+  @@map("reviews")
+}
+
+model Report {
+  id          String       @id @default(uuid())
+  reporterId  String
+  listingId   String?
+  reason      ReportReason
+  description String?
+  status      ReportStatus @default(OPEN)
+  resolvedById String?
+  resolution  String?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  reporter  User            @relation("ReporterReports", fields: [reporterId], references: [id])
+  listing   ProductListing? @relation(fields: [listingId], references: [id])
+
+  @@index([status])
+  @@map("reports")
+}
+
+model Notification {
+  id        String           @id @default(uuid())
+  userId    String
+  type      NotificationType
+  title     String
+  body      String
+  data      Json?
+  isRead    Boolean          @default(false)
+  readAt    DateTime?
+  createdAt DateTime         @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isRead])
+  @@index([userId, createdAt(sort: Desc)])
+  @@map("notifications")
+}
+
+model NotificationPreference {
+  id          String   @id @default(uuid())
+  userId      String   @unique
+  emailBids   Boolean  @default(true)
+  emailOrders Boolean  @default(true)
+  emailOffers Boolean  @default(true)
+  pushBids    Boolean  @default(true)
+  pushOrders  Boolean  @default(true)
+  updatedAt   DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("notification_preferences")
+}
+
+// ─── SYSTEM & ADMIN ──────────────────────────────────────────────────────────
+
+model ModerationDecision {
+  id         String                 @id @default(uuid())
+  listingId  String
+  moderatorId String
+  decision   ModerationDecisionType
+  reason     String?
+  createdAt  DateTime               @default(now())
+
+  listing   ProductListing @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  moderator User           @relation(fields: [moderatorId], references: [id])
+
+  @@index([listingId])
+  @@map("moderation_decisions")
+}
+
+model PlatformSetting {
+  id        String   @id @default(uuid())
+  key       String   @unique
+  value     String
+  dataType  String   @default("string") // string, number, boolean, json
+  updatedAt DateTime @updatedAt
+  updatedBy String?
+
+  @@map("platform_settings")
+}
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  actorId    String?
+  action     String
+  entityType String
+  entityId   String
+  before     Json?
+  after      Json?
+  ipAddress  String?
+  userAgent  String?
+  createdAt  DateTime @default(now())
+
+  actor User? @relation(fields: [actorId], references: [id])
+
+  @@index([entityType, entityId])
+  @@index([actorId, createdAt])
+  @@map("audit_logs")
+}
+
+model RefundRequest {
+  id                String       @id @default(uuid())
+  orderId           String       @unique
+  sellerId          String
+  buyerId           String
+  reason            String
+  explanation       String?
+  refundAmountPaise Int
+  status            String       @default("PENDING") // PENDING, APPROVED, REJECTED, ADMIN_ESCALATED
+  sellerResponse    String?
+  resolvedAt        DateTime?
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+
+  order  Order @relation(fields: [orderId], references: [id])
+  seller User  @relation("SellerRefundRequests", fields: [sellerId], references: [id])
+  buyer  User  @relation("BuyerRefundRequests", fields: [buyerId], references: [id])
+
+  @@index([sellerId])
+  @@index([buyerId])
+  @@map("refund_requests")
+}
+
