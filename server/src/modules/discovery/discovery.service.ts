@@ -2,13 +2,17 @@ import prisma from '../../config/database';
 
 export class DiscoveryService {
   async getHomeFeed() {
+    const now = new Date();
+    const activeAuctionWhere = {
+      status: { in: ['LIVE', 'CLOSING'] as ('LIVE' | 'CLOSING')[] },
+      scheduledEndAt: { gt: now },
+      listing: { status: 'ACTIVE' as const, deletedAt: null },
+    };
+
     const [liveAuctions, endingSoonAuctions, featuredFixedPrice, categories, stats] = await Promise.all([
       // Live Auctions (up to 6)
       prisma.auction.findMany({
-        where: {
-          status: 'LIVE',
-          listing: { status: 'ACTIVE', deletedAt: null },
-        },
+        where: activeAuctionWhere,
         orderBy: { scheduledEndAt: 'asc' },
         take: 6,
         include: {
@@ -27,10 +31,7 @@ export class DiscoveryService {
 
       // Ending Soon (next to end)
       prisma.auction.findMany({
-        where: {
-          status: 'LIVE',
-          listing: { status: 'ACTIVE', deletedAt: null },
-        },
+        where: activeAuctionWhere,
         orderBy: { scheduledEndAt: 'asc' },
         take: 4,
         include: {
@@ -73,7 +74,7 @@ export class DiscoveryService {
       Promise.all([
         prisma.user.count(),
         prisma.productListing.count({ where: { status: 'ACTIVE' } }),
-        prisma.auction.count({ where: { status: 'LIVE' } }),
+        prisma.auction.count({ where: activeAuctionWhere }),
         prisma.bid.count(),
       ]),
     ]);

@@ -61,29 +61,84 @@ function HeroSearch() {
   );
 }
 
-function FeaturedAuction({ auction }: { auction?: HomeFeed['liveAuctions'][number] }) {
-  if (!auction) {
+const HERO_FALLBACK_IMAGE = 'https://images.unsplash.com/photo-1523275335684-37898b6baf30?w=1000';
+
+function FeaturedHero({
+  auction,
+  fallbackListing,
+  loading,
+}: {
+  auction?: HomeFeed['liveAuctions'][number];
+  fallbackListing?: ApiListing;
+  loading: boolean;
+}) {
+  if (loading) {
     return <Skeleton className="aspect-[4/5] w-full rounded-3xl" />;
   }
+
+  const card = auction
+    ? {
+        href: `/auction/${auction.id}`,
+        src: auction.listing.images?.[0]?.imageUrl,
+        alt: auction.listing.title,
+        badge: <Badge tone="live" dot>Live now</Badge>,
+        timer: auction.scheduledEndAt,
+        eyebrow: auction.listing.category?.name || 'Featured auction',
+        title: auction.listing.title,
+        priceLabel: 'Current bid',
+        priceValue: formatINR(auction.currentHighBidPaise || auction.startingBidPaise),
+        cta: 'Place bid',
+        ctaClass: 'bg-accent',
+      }
+    : fallbackListing
+      ? {
+          href: `/product/${fallbackListing.id}`,
+          src: fallbackListing.images?.[0]?.imageUrl || HERO_FALLBACK_IMAGE,
+          alt: fallbackListing.title,
+          badge: <Badge tone="neutral">Featured lot</Badge>,
+          timer: null,
+          eyebrow: fallbackListing.category?.name || 'Curated marketplace',
+          title: fallbackListing.title,
+          priceLabel: 'Buy now',
+          priceValue: formatINR(fallbackListing.priceInPaise),
+          cta: 'View item',
+          ctaClass: 'bg-ink',
+        }
+      : {
+          href: '/explore',
+          src: HERO_FALLBACK_IMAGE,
+          alt: 'Curated luxury timepiece on Auctio',
+          badge: <Badge tone="neutral">Curated catalog</Badge>,
+          timer: null,
+          eyebrow: 'Verified sellers',
+          title: 'Discover rare collectibles & timed auctions',
+          priceLabel: 'Marketplace',
+          priceValue: 'Browse all lots',
+          cta: 'Explore',
+          ctaClass: 'bg-accent',
+        };
+
   return (
-    <Link href={`/auction/${auction.id}`} className="group relative block overflow-hidden rounded-3xl border border-line bg-surface shadow-overlay">
-      <SafeImage src={auction.listing.images?.[0]?.imageUrl} alt={auction.listing.title} loading="eager" className="aspect-[4/5] w-full transition-transform duration-500 group-hover:scale-[1.02]" />
+    <Link href={card.href} className="group relative block overflow-hidden rounded-3xl border border-line bg-surface shadow-overlay">
+      <SafeImage src={card.src} alt={card.alt} loading="eager" className="aspect-[4/5] w-full transition-transform duration-500 group-hover:scale-[1.02]" />
       <div className="absolute inset-x-0 top-0 flex items-center justify-between p-4">
-        <Badge tone="live" dot>Live now</Badge>
-        <span className="rounded-full bg-ink/80 px-3 py-1 text-xs font-medium text-white backdrop-blur">
-          <Countdown endsAt={auction.scheduledEndAt} className="text-white" />
-        </span>
+        {card.badge}
+        {card.timer && (
+          <span className="rounded-full bg-ink/80 px-3 py-1 text-xs font-medium text-white backdrop-blur">
+            <Countdown endsAt={card.timer} className="text-white" />
+          </span>
+        )}
       </div>
       <div className="absolute inset-x-3 bottom-3 rounded-2xl bg-surface/95 p-4 backdrop-blur">
-        <p className="text-xs text-muted">{auction.listing.category?.name || 'Featured auction'}</p>
-        <p className="mt-0.5 line-clamp-1 font-medium text-ink">{auction.listing.title}</p>
+        <p className="text-xs text-muted">{card.eyebrow}</p>
+        <p className="mt-0.5 line-clamp-1 font-medium text-ink">{card.title}</p>
         <div className="mt-3 flex items-end justify-between">
           <div>
-            <p className="text-xs text-muted">Current bid</p>
-            <p className="tabular text-xl font-semibold text-ink">{formatINR(auction.currentHighBidPaise || auction.startingBidPaise)}</p>
+            <p className="text-xs text-muted">{card.priceLabel}</p>
+            <p className="tabular text-xl font-semibold text-ink">{card.priceValue}</p>
           </div>
-          <span className="inline-flex h-10 items-center gap-1.5 rounded-xl bg-accent px-4 text-sm font-medium text-white">
-            Place bid <ArrowRight className="size-4" aria-hidden />
+          <span className={`inline-flex h-10 items-center gap-1.5 rounded-xl px-4 text-sm font-medium text-white ${card.ctaClass}`}>
+            {card.cta} <ArrowRight className="size-4" aria-hidden />
           </span>
         </div>
       </div>
@@ -95,6 +150,7 @@ export default function HomePage() {
   const { data, loading, error, reload } = useApi<HomeFeed>('/discovery/home');
   const live = (data?.liveAuctions || []).filter((a) => isBiddable(a.status, a.scheduledEndAt));
   const featured = live[0];
+  const fallbackListing = data?.featuredFixedPrice?.[0];
 
   return (
     <>
@@ -134,7 +190,7 @@ export default function HomePage() {
             </dl>
           </div>
           <div className="mx-auto w-full max-w-md lg:max-w-none">
-            {error || (data && !featured) ? null : <FeaturedAuction auction={featured} />}
+            <FeaturedHero auction={featured} fallbackListing={fallbackListing} loading={loading} />
           </div>
         </div>
       </section>
